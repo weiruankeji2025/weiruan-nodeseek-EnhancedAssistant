@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         NodeSeek 增强助手
 // @namespace    https://github.com/weiruankeji2025/weiruan-nodeseek-Sign.in
-// @version      1.2.0
-// @description  NodeSeek论坛增强：自动签到 + 最新留言预览 + 交易成功记录侧边栏
+// @version      1.3.0
+// @description  NodeSeek论坛增强：自动签到 + 最新留言预览 + 交易记录 + 抽奖帖侧边栏
 // @author       weiruankeji2025
 // @match        https://www.nodeseek.com/*
 // @icon         https://www.nodeseek.com/favicon.ico
@@ -10,6 +10,8 @@
 // @grant        GM_getValue
 // @grant        GM_notification
 // @grant        GM_addStyle
+// @grant        GM_xmlhttpRequest
+// @connect      www.nodeseek.com
 // @license      MIT
 // ==/UserScript==
 
@@ -20,115 +22,128 @@
     const CONFIG = {
         API_URL: 'https://www.nodeseek.com/api/attendance',
         TRADE_URL: 'https://www.nodeseek.com/categories/trade',
+        HOME_URL: 'https://www.nodeseek.com/',
         STORAGE_KEY: 'ns_last_checkin',
         RANDOM_MODE: true,
-        PREVIEW_MAX_LEN: 50,
-        TRADE_COUNT: 5,
+        PREVIEW_MAX_LEN: 40,
+        SIDEBAR_COUNT: 5,
         CACHE_TTL: 5 * 60 * 1000
     };
 
-    const commentCache = new Map();
+    const cache = new Map();
 
     // ==================== 样式注入 ====================
     GM_addStyle(`
         /* 最新留言样式 */
-        .ns-latest-comment {
-            display: inline-block;
-            max-width: 300px;
-            margin-left: 8px;
-            padding: 2px 8px;
+        .ns-comment-preview {
+            display: inline-flex;
+            align-items: center;
+            max-width: 280px;
+            margin-left: 10px;
+            padding: 2px 10px;
             font-size: 12px;
-            color: #666;
-            background: #f5f5f5;
-            border-radius: 4px;
+            color: #888;
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            border-radius: 12px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
             vertical-align: middle;
-            cursor: pointer;
-            transition: all 0.2s;
+            cursor: default;
+            border: 1px solid #e0e0e0;
         }
-        .ns-latest-comment:hover { background: #e8e8e8; color: #333; }
-        .ns-latest-comment .ns-author { color: #1890ff; margin-right: 4px; }
-        .ns-loading { color: #999; font-style: italic; }
+        .ns-comment-preview:hover { background: linear-gradient(135deg, #e8ecf1 0%, #d5dbe3 100%); color: #555; }
+        .ns-comment-preview .ns-user { color: #5c6bc0; font-weight: 500; margin-right: 6px; }
+        .ns-comment-preview .ns-text { color: #666; }
+        .ns-comment-loading { color: #aaa; font-style: italic; background: #f9f9f9; }
 
-        /* 交易侧边栏样式 */
-        .ns-trade-sidebar {
+        /* 侧边栏容器 */
+        .ns-sidebar {
             position: fixed;
-            right: 10px;
-            top: 50%;
-            transform: translateY(-50%);
-            width: 280px;
-            max-height: 400px;
-            background: #fff;
-            border-radius: 8px;
-            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+            right: 15px;
+            top: 80px;
+            width: 260px;
+            max-height: calc(100vh - 100px);
+            overflow-y: auto;
             z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        /* 侧边栏卡片通用样式 */
+        .ns-card {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
             overflow: hidden;
             font-size: 13px;
         }
-        .ns-trade-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: #fff;
-            padding: 12px 15px;
+        .ns-card-header {
+            padding: 10px 14px;
             font-weight: 600;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            cursor: pointer;
+            user-select: none;
         }
-        .ns-trade-header span { font-size: 12px; opacity: 0.8; cursor: pointer; }
-        .ns-trade-header span:hover { opacity: 1; }
-        .ns-trade-list { padding: 8px 0; max-height: 320px; overflow-y: auto; }
-        .ns-trade-item {
-            padding: 10px 15px;
+        .ns-card-header:hover { opacity: 0.9; }
+        .ns-card-toggle { font-size: 14px; opacity: 0.7; }
+        .ns-card-body { max-height: 300px; overflow-y: auto; }
+        .ns-card.collapsed .ns-card-body { display: none; }
+        .ns-card.collapsed .ns-card-header { border-radius: 10px; }
+
+        /* 交易卡片 */
+        .ns-card.trade .ns-card-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+
+        /* 抽奖卡片 */
+        .ns-card.lottery .ns-card-header { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: #fff; }
+
+        /* 列表项 */
+        .ns-item {
+            padding: 10px 14px;
             border-bottom: 1px solid #f0f0f0;
             transition: background 0.2s;
         }
-        .ns-trade-item:last-child { border-bottom: none; }
-        .ns-trade-item:hover { background: #f9f9f9; }
-        .ns-trade-item a {
-            color: #333;
-            text-decoration: none;
-            display: block;
-            line-height: 1.4;
+        .ns-item:last-child { border-bottom: none; }
+        .ns-item:hover { background: #fafafa; }
+        .ns-item a { color: #333; text-decoration: none; display: block; line-height: 1.5; }
+        .ns-item a:hover { color: #1890ff; }
+        .ns-item-title { display: flex; align-items: center; gap: 6px; }
+        .ns-tag {
+            flex-shrink: 0;
+            padding: 2px 6px;
+            font-size: 10px;
+            border-radius: 3px;
+            color: #fff;
         }
-        .ns-trade-item a:hover { color: #1890ff; }
-        .ns-trade-title {
+        .ns-tag.sold { background: #52c41a; }
+        .ns-tag.bought { background: #1890ff; }
+        .ns-tag.lottery { background: #f5576c; }
+        .ns-tag.active { background: #faad14; }
+        .ns-item-text {
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
-            margin-bottom: 4px;
+            font-size: 12px;
         }
-        .ns-trade-tag {
-            display: inline-block;
-            padding: 1px 6px;
-            font-size: 11px;
-            border-radius: 3px;
-            margin-right: 5px;
-        }
-        .ns-trade-tag.sold { background: #52c41a; color: #fff; }
-        .ns-trade-tag.bought { background: #1890ff; color: #fff; }
-        .ns-trade-meta { font-size: 11px; color: #999; }
-        .ns-trade-empty { text-align: center; padding: 30px; color: #999; }
-        .ns-trade-collapsed { width: auto; height: auto; }
-        .ns-trade-collapsed .ns-trade-list { display: none; }
-        .ns-trade-collapsed .ns-trade-header { border-radius: 8px; }
+        .ns-empty { text-align: center; padding: 25px; color: #999; font-size: 12px; }
 
         /* 深色模式 */
         @media (prefers-color-scheme: dark) {
-            .ns-latest-comment { background: #333; color: #aaa; }
-            .ns-latest-comment:hover { background: #444; color: #ddd; }
-            .ns-trade-sidebar { background: #1f1f1f; }
-            .ns-trade-item { border-color: #333; }
-            .ns-trade-item:hover { background: #2a2a2a; }
-            .ns-trade-item a { color: #ddd; }
-            .ns-trade-meta { color: #666; }
+            .ns-comment-preview { background: linear-gradient(135deg, #2d2d2d 0%, #1f1f1f 100%); border-color: #444; color: #999; }
+            .ns-comment-preview:hover { background: linear-gradient(135deg, #3d3d3d 0%, #2f2f2f 100%); color: #ccc; }
+            .ns-comment-preview .ns-user { color: #7986cb; }
+            .ns-comment-preview .ns-text { color: #aaa; }
+            .ns-card { background: #1f1f1f; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+            .ns-item { border-color: #333; }
+            .ns-item:hover { background: #2a2a2a; }
+            .ns-item a { color: #ddd; }
         }
 
-        /* 响应式隐藏 */
-        @media (max-width: 1400px) {
-            .ns-trade-sidebar { display: none; }
-        }
+        /* 响应式 */
+        @media (max-width: 1400px) { .ns-sidebar { display: none; } }
     `);
 
     // ==================== 工具函数 ====================
@@ -138,14 +153,13 @@
         GM_notification({ title, text, timeout: 3000 });
         console.log(`[NS助手] ${title}: ${text}`);
     };
-    const extractPostId = (url) => {
-        const match = url.match(/\/post-(\d+)/);
-        return match ? match[1] : null;
-    };
+    const extractPostId = (url) => url?.match(/\/post-(\d+)/)?.[1];
     const truncate = (text, len) => {
+        if (!text) return '';
         text = text.trim().replace(/\s+/g, ' ');
-        return text.length > len ? text.slice(0, len) + '...' : text;
+        return text.length > len ? text.slice(0, len) + '…' : text;
     };
+    const escapeHtml = (str) => str.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
     // ==================== 签到功能 ====================
     const doCheckin = async () => {
@@ -153,11 +167,7 @@
         try {
             const res = await fetch(CONFIG.API_URL, {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Origin': 'https://www.nodeseek.com',
-                    'Referer': 'https://www.nodeseek.com/board'
-                },
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 credentials: 'include',
                 body: `random=${CONFIG.RANDOM_MODE}`
             });
@@ -165,7 +175,7 @@
             if (data.success) {
                 GM_setValue(CONFIG.STORAGE_KEY, getToday());
                 notify('签到成功', data.message || '获得鸡腿奖励！');
-            } else if (data.message?.includes('已完成签到')) {
+            } else if (data.message?.includes('已完成')) {
                 GM_setValue(CONFIG.STORAGE_KEY, getToday());
             }
         } catch (e) {
@@ -173,61 +183,90 @@
         }
     };
 
-    // ==================== 最新留言功能 ====================
+    // ==================== 最新留言预览 ====================
     const fetchLatestComment = async (postId) => {
-        const cached = commentCache.get(postId);
+        const cacheKey = `comment_${postId}`;
+        const cached = cache.get(cacheKey);
         if (cached && Date.now() - cached.time < CONFIG.CACHE_TTL) return cached.data;
 
         try {
-            const res = await fetch(`https://www.nodeseek.com/post-${postId}-1`, { credentials: 'include' });
-            const html = await res.text();
-            const doc = new DOMParser().parseFromString(html, 'text/html');
+            // 先获取帖子第一页，找到总页数
+            const res1 = await fetch(`https://www.nodeseek.com/post-${postId}-1`, { credentials: 'include' });
+            const html1 = await res1.text();
+            const doc1 = new DOMParser().parseFromString(html1, 'text/html');
 
-            const pagination = doc.querySelector('.pagination');
-            let lastPageUrl = `/post-${postId}-1`;
-            if (pagination) {
-                const pageLinks = pagination.querySelectorAll('a[href*="/post-"]');
-                if (pageLinks.length > 0) lastPageUrl = pageLinks[pageLinks.length - 1].getAttribute('href');
+            // 找最后一页
+            let lastPage = 1;
+            const pageLinks = doc1.querySelectorAll('a[href*="/post-' + postId + '-"]');
+            pageLinks.forEach(a => {
+                const m = a.href.match(/post-\d+-(\d+)/);
+                if (m) lastPage = Math.max(lastPage, parseInt(m[1]));
+            });
+
+            // 获取最后一页
+            let finalDoc = doc1;
+            if (lastPage > 1) {
+                const res2 = await fetch(`https://www.nodeseek.com/post-${postId}-${lastPage}`, { credentials: 'include' });
+                finalDoc = new DOMParser().parseFromString(await res2.text(), 'text/html');
             }
 
-            let commentsDoc = doc;
-            if (lastPageUrl !== `/post-${postId}-1`) {
-                const lastRes = await fetch(`https://www.nodeseek.com${lastPageUrl}`, { credentials: 'include' });
-                commentsDoc = new DOMParser().parseFromString(await lastRes.text(), 'text/html');
+            // 提取评论 - 多种选择器策略
+            let result = null;
+
+            // 策略1: 查找所有包含用户链接的评论区块
+            const postBlocks = finalDoc.querySelectorAll('[class*="post"]:not([class*="post-list"]), [class*="comment"], [class*="reply"], .floor, [id*="post-"]');
+            const validBlocks = Array.from(postBlocks).filter(block => {
+                const hasAuthor = block.querySelector('a[href*="/space/"]');
+                const hasContent = block.textContent.length > 10;
+                return hasAuthor && hasContent;
+            });
+
+            if (validBlocks.length > 0) {
+                const lastBlock = validBlocks[validBlocks.length - 1];
+                const authorEl = lastBlock.querySelector('a[href*="/space/"]');
+                // 找内容区域 - 排除用户信息区
+                const contentEl = lastBlock.querySelector('[class*="content"]:not([class*="user"]), .text, .body, p:not(:empty)');
+
+                if (authorEl) {
+                    result = {
+                        author: authorEl.textContent.trim().slice(0, 15),
+                        content: contentEl ? contentEl.textContent.trim() : lastBlock.textContent.trim()
+                    };
+                }
             }
 
-            const comments = commentsDoc.querySelectorAll('.post-content, .comment-content, .content, [class*="comment"], [class*="reply"]');
-            let latestComment = null;
-
-            if (comments.length > 0) {
-                const lastComment = comments[comments.length - 1];
-                const authorEl = lastComment.closest('[class*="post"], [class*="comment"], [class*="reply"]')
-                    ?.querySelector('[class*="author"], [class*="user"], .username, a[href*="/space/"]');
-                latestComment = {
-                    author: authorEl?.textContent?.trim() || '匿名',
-                    content: lastComment.textContent?.trim() || ''
-                };
-            }
-
-            if (!latestComment?.content) {
-                const allPosts = commentsDoc.querySelectorAll('[id^="post-"]');
-                if (allPosts.length > 0) {
-                    const lastPost = allPosts[allPosts.length - 1];
-                    const contentEl = lastPost.querySelector('[class*="content"], p, .text');
-                    const authorEl = lastPost.querySelector('a[href*="/space/"], [class*="author"]');
-                    if (contentEl) {
-                        latestComment = {
-                            author: authorEl?.textContent?.trim() || '匿名',
-                            content: contentEl.textContent?.trim() || ''
-                        };
+            // 策略2: 使用script中的JSON数据(如果有)
+            if (!result?.content) {
+                const scripts = finalDoc.querySelectorAll('script:not([src])');
+                for (const script of scripts) {
+                    const text = script.textContent;
+                    if (text.includes('comments') || text.includes('replies') || text.includes('posts')) {
+                        try {
+                            const jsonMatch = text.match(/\{[\s\S]*"content"[\s\S]*\}/);
+                            if (jsonMatch) {
+                                const data = JSON.parse(jsonMatch[0]);
+                                if (data.content) {
+                                    result = { author: data.author || data.username || '用户', content: data.content };
+                                    break;
+                                }
+                            }
+                        } catch {}
                     }
                 }
             }
 
-            commentCache.set(postId, { data: latestComment, time: Date.now() });
-            return latestComment;
+            // 清理内容
+            if (result?.content) {
+                result.content = result.content
+                    .replace(/<[^>]+>/g, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            }
+
+            cache.set(cacheKey, { data: result, time: Date.now() });
+            return result;
         } catch (e) {
-            console.error('[NS助手] 获取评论失败:', e);
+            console.error('[NS助手] 获取评论失败:', postId, e);
             return null;
         }
     };
@@ -236,15 +275,33 @@
         if (titleEl.dataset.nsProcessed) return;
         titleEl.dataset.nsProcessed = 'true';
 
+        // 检查回复数，如果为0则跳过
+        const row = titleEl.closest('tr, [class*="post-item"], [class*="row"], li');
+        if (row) {
+            const replyCount = row.querySelector('[class*="reply"], [class*="comment"], .count, .num');
+            if (replyCount && (replyCount.textContent.trim() === '0' || replyCount.textContent.trim() === '')) {
+                return; // 无回复，跳过
+            }
+        }
+
         const preview = document.createElement('span');
-        preview.className = 'ns-latest-comment ns-loading';
+        preview.className = 'ns-comment-preview ns-comment-loading';
         preview.textContent = '加载中...';
-        titleEl.parentNode.insertBefore(preview, titleEl.nextSibling);
+
+        // 插入到标题后面
+        if (titleEl.nextSibling) {
+            titleEl.parentNode.insertBefore(preview, titleEl.nextSibling);
+        } else {
+            titleEl.parentNode.appendChild(preview);
+        }
 
         const comment = await fetchLatestComment(postId);
-        if (comment?.content) {
-            preview.className = 'ns-latest-comment';
-            preview.innerHTML = `<span class="ns-author">${comment.author}:</span>${truncate(comment.content, CONFIG.PREVIEW_MAX_LEN)}`;
+
+        if (comment?.content && comment.content.length > 2) {
+            preview.className = 'ns-comment-preview';
+            const author = escapeHtml(truncate(comment.author, 10));
+            const content = escapeHtml(truncate(comment.content, CONFIG.PREVIEW_MAX_LEN));
+            preview.innerHTML = `<span class="ns-user">${author}:</span><span class="ns-text">${content}</span>`;
             preview.title = `${comment.author}: ${comment.content}`;
         } else {
             preview.remove();
@@ -252,97 +309,162 @@
     };
 
     const processPostList = () => {
-        document.querySelectorAll('a[href*="/post-"]').forEach(link => {
-            const postId = extractPostId(link.getAttribute('href'));
-            if (!postId) return;
-            const parent = link.closest('[class*="title"], [class*="post-item"], [class*="topic"], li, tr');
+        // 查找帖子标题链接
+        const links = document.querySelectorAll('a[href*="/post-"]');
+        const processed = new Set();
+
+        links.forEach(link => {
+            const href = link.getAttribute('href');
+            const postId = extractPostId(href);
+            if (!postId || processed.has(postId)) return;
+
+            // 验证是否为主标题链接
+            const text = link.textContent.trim();
+            if (text.length < 5) return; // 标题太短，可能是页码等
+
+            // 排除元信息区域的链接
+            if (link.closest('[class*="meta"], [class*="info"], [class*="stat"], [class*="page"], .pagination')) return;
+
+            // 确保是帖子标题
+            const parent = link.closest('h2, h3, h4, [class*="title"], [class*="subject"], td, .topic');
             if (!parent) return;
-            const isMainTitle = link.textContent.length > 5 && !link.closest('[class*="meta"], [class*="info"], [class*="stat"]');
-            if (isMainTitle) addCommentPreview(link, postId);
+
+            processed.add(postId);
+            addCommentPreview(link, postId);
         });
     };
 
-    // ==================== 交易记录侧边栏 ====================
-    const fetchTradeRecords = async () => {
+    // ==================== 侧边栏功能 ====================
+    const fetchPosts = async (url, filter) => {
         try {
-            const res = await fetch(CONFIG.TRADE_URL, { credentials: 'include' });
+            const res = await fetch(url, { credentials: 'include' });
             const html = await res.text();
             const doc = new DOMParser().parseFromString(html, 'text/html');
 
-            const trades = [];
+            const posts = [];
             const links = doc.querySelectorAll('a[href*="/post-"]');
+            const seen = new Set();
 
             links.forEach(link => {
                 const title = link.textContent.trim();
                 const href = link.getAttribute('href');
+                const postId = extractPostId(href);
 
-                // 匹配已出/已收标记
-                const soldMatch = title.match(/[\[【(（]?\s*已出\s*[\]】)）]?/i);
-                const boughtMatch = title.match(/[\[【(（]?\s*已收\s*[\]】)）]?/i);
+                if (!postId || seen.has(postId) || title.length < 5) return;
+                if (posts.length >= CONFIG.SIDEBAR_COUNT) return;
 
-                if ((soldMatch || boughtMatch) && href && trades.length < CONFIG.TRADE_COUNT) {
-                    // 清理标题
-                    let cleanTitle = title
-                        .replace(/[\[【(（]?\s*已出\s*[\]】)）]?/gi, '')
-                        .replace(/[\[【(（]?\s*已收\s*[\]】)）]?/gi, '')
-                        .trim();
-
-                    if (cleanTitle.length > 2) {
-                        trades.push({
-                            title: cleanTitle,
-                            url: href.startsWith('http') ? href : `https://www.nodeseek.com${href}`,
-                            type: soldMatch ? 'sold' : 'bought'
-                        });
-                    }
+                const filterResult = filter(title);
+                if (filterResult) {
+                    seen.add(postId);
+                    posts.push({
+                        title: filterResult.cleanTitle || title,
+                        url: href.startsWith('http') ? href : `https://www.nodeseek.com${href}`,
+                        type: filterResult.type,
+                        tag: filterResult.tag
+                    });
                 }
             });
 
-            return trades;
+            return posts;
         } catch (e) {
-            console.error('[NS助手] 获取交易记录失败:', e);
+            console.error('[NS助手] 获取帖子失败:', e);
             return [];
         }
     };
 
-    const createTradeSidebar = async () => {
-        // 检查是否已存在
-        if (document.querySelector('.ns-trade-sidebar')) return;
+    // 交易记录过滤器
+    const tradeFilter = (title) => {
+        const soldMatch = title.match(/[\[【(（]?\s*已出\s*[\]】)）]?/);
+        const boughtMatch = title.match(/[\[【(（]?\s*已收\s*[\]】)）]?/);
+        if (!soldMatch && !boughtMatch) return null;
+
+        let cleanTitle = title
+            .replace(/[\[【(（]?\s*已出\s*[\]】)）]?/g, '')
+            .replace(/[\[【(（]?\s*已收\s*[\]】)）]?/g, '')
+            .trim();
+
+        return {
+            cleanTitle,
+            type: soldMatch ? 'sold' : 'bought',
+            tag: soldMatch ? '已出' : '已收'
+        };
+    };
+
+    // 抽奖帖过滤器
+    const lotteryFilter = (title) => {
+        const isEnded = /已开奖|已结束|已完成/.test(title);
+        const isLottery = /抽奖|开奖|福利|免费送|白嫖/.test(title);
+        if (!isLottery) return null;
+
+        let cleanTitle = title
+            .replace(/[\[【(（]?\s*(已开奖|抽奖|开奖|福利)\s*[\]】)）]?/g, '')
+            .trim();
+
+        return {
+            cleanTitle: cleanTitle || title,
+            type: isEnded ? 'ended' : 'active',
+            tag: isEnded ? '已开奖' : '抽奖中'
+        };
+    };
+
+    const createSidebar = async () => {
+        if (document.querySelector('.ns-sidebar')) return;
 
         const sidebar = document.createElement('div');
-        sidebar.className = 'ns-trade-sidebar';
-        sidebar.innerHTML = `
-            <div class="ns-trade-header">
-                <span>📦 最近成交</span>
-                <span class="ns-toggle" title="折叠/展开">−</span>
-            </div>
-            <div class="ns-trade-list">
-                <div class="ns-trade-empty">加载中...</div>
-            </div>
-        `;
+        sidebar.className = 'ns-sidebar';
         document.body.appendChild(sidebar);
 
+        // 创建交易卡片
+        const tradeCard = createCard('trade', '📦 最近成交', CONFIG.TRADE_URL, tradeFilter);
+        sidebar.appendChild(tradeCard);
+
+        // 创建抽奖卡片
+        const lotteryCard = createCard('lottery', '🎁 最新抽奖', CONFIG.HOME_URL, lotteryFilter);
+        sidebar.appendChild(lotteryCard);
+    };
+
+    const createCard = (type, title, url, filter) => {
+        const card = document.createElement('div');
+        card.className = `ns-card ${type}`;
+        card.innerHTML = `
+            <div class="ns-card-header">
+                <span>${title}</span>
+                <span class="ns-card-toggle">−</span>
+            </div>
+            <div class="ns-card-body">
+                <div class="ns-empty">加载中...</div>
+            </div>
+        `;
+
         // 折叠功能
-        const toggle = sidebar.querySelector('.ns-toggle');
-        toggle.addEventListener('click', () => {
-            sidebar.classList.toggle('ns-trade-collapsed');
-            toggle.textContent = sidebar.classList.contains('ns-trade-collapsed') ? '+' : '−';
+        const header = card.querySelector('.ns-card-header');
+        const toggle = card.querySelector('.ns-card-toggle');
+        header.addEventListener('click', () => {
+            card.classList.toggle('collapsed');
+            toggle.textContent = card.classList.contains('collapsed') ? '+' : '−';
         });
 
-        // 获取交易记录
-        const trades = await fetchTradeRecords();
-        const list = sidebar.querySelector('.ns-trade-list');
+        // 加载数据
+        loadCardData(card, url, filter, type);
 
-        if (trades.length === 0) {
-            list.innerHTML = '<div class="ns-trade-empty">暂无成交记录</div>';
+        return card;
+    };
+
+    const loadCardData = async (card, url, filter, type) => {
+        const body = card.querySelector('.ns-card-body');
+        const posts = await fetchPosts(url, filter);
+
+        if (posts.length === 0) {
+            body.innerHTML = '<div class="ns-empty">暂无数据</div>';
             return;
         }
 
-        list.innerHTML = trades.map(t => `
-            <div class="ns-trade-item">
-                <a href="${t.url}" target="_blank">
-                    <div class="ns-trade-title">
-                        <span class="ns-trade-tag ${t.type}">${t.type === 'sold' ? '已出' : '已收'}</span>
-                        ${truncate(t.title, 30)}
+        body.innerHTML = posts.map(p => `
+            <div class="ns-item">
+                <a href="${p.url}" target="_blank" title="${escapeHtml(p.title)}">
+                    <div class="ns-item-title">
+                        <span class="ns-tag ${p.type}">${p.tag}</span>
+                        <span class="ns-item-text">${escapeHtml(truncate(p.title, 25))}</span>
                     </div>
                 </a>
             </div>
@@ -351,28 +473,28 @@
 
     // ==================== 初始化 ====================
     const init = () => {
+        console.log('[NS助手] 初始化...');
+
+        // 签到
         setTimeout(doCheckin, 2000);
 
-        // 帖子列表页处理最新留言
-        if (location.pathname.includes('/board') ||
-            location.pathname === '/' ||
-            location.pathname.includes('/category')) {
-            setTimeout(processPostList, 1000);
+        // 帖子列表处理
+        const isListPage = location.pathname === '/' ||
+            location.pathname.includes('/board') ||
+            location.pathname.includes('/categor');
 
-            const observer = new MutationObserver((mutations) => {
-                for (const m of mutations) {
-                    if (m.addedNodes.length) {
-                        setTimeout(processPostList, 500);
-                        break;
-                    }
-                }
+        if (isListPage) {
+            // 延迟处理，等待页面加载完成
+            setTimeout(processPostList, 1500);
+
+            // 监听动态加载
+            const observer = new MutationObserver(() => {
+                setTimeout(processPostList, 300);
             });
             observer.observe(document.body, { childList: true, subtree: true });
-        }
 
-        // 主页显示交易侧边栏
-        if (location.pathname === '/' || location.pathname.includes('/board')) {
-            setTimeout(createTradeSidebar, 1500);
+            // 侧边栏
+            setTimeout(createSidebar, 2000);
         }
     };
 
