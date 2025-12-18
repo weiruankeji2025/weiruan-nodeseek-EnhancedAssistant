@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek 增强助手
 // @namespace    https://github.com/weiruankeji2025/weiruan-nodeseek-Sign.in
-// @version      2.0.5
+// @version      2.0.6
 // @description  NodeSeek论坛增强：自动签到 + 交易监控 + 抽奖追踪 + 中奖提醒
 // @author       weiruankeji2025
 // @match        https://www.nodeseek.com/*
@@ -397,22 +397,31 @@
 
         for (const post of posts) {
             if (results.length >= CONFIG.LOTTERY_COUNT || seen.has(post.id)) continue;
-            // 只根据标题判断是否是抽奖帖
-            if (!/抽奖|开奖|福利|免费送|白嫖|🎁|🎉/i.test(post.title)) continue;
-            if (/已开奖|已结束|已完成|结束|开奖结果/i.test(post.title)) continue;
+
+            const title = post.title;
+
+            // 严格匹配真实抽奖帖：必须包含"抽奖"或"开奖"关键词
+            const isRealLottery = /抽奖|开奖|\b抽\s*\d+|送.{0,5}名|随机抽/.test(title);
+            if (!isRealLottery) continue;
+
+            // 排除已结束的
+            if (/已开奖|已结束|已完成|开奖结果|中奖名单/i.test(title)) continue;
+
+            // 排除非抽奖内容
+            if (/招聘|求职|教程|问题|讨论|分享经验/i.test(title)) continue;
 
             // 提取开奖时间
-            const lotteryTime = extractLotteryTime(post.title);
+            const lotteryTime = extractLotteryTime(title);
 
             seen.add(post.id);
-            const cleanTitle = post.title
-                .replace(/[\[【(（]?\s*(抽奖|开奖|福利)\s*[\]】)）]?/gi, '')
+            const cleanTitle = title
+                .replace(/[\[【(（]?\s*(抽奖|开奖)\s*[\]】)）]?/gi, '')
                 .replace(/^\s*[:：]\s*/, '')
                 .trim();
 
             results.push({
                 id: post.id,
-                title: cleanTitle || post.title,
+                title: cleanTitle || title,
                 url: post.url,
                 tag: '抽奖',
                 lotteryTime,
