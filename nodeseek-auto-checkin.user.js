@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek 增强助手
 // @namespace    https://github.com/weiruankeji2025/weiruan-nodeseek-Sign.in
-// @version      2.0.0
+// @version      2.0.1
 // @description  NodeSeek论坛增强：自动签到 + 交易监控 + 抽奖追踪 + 中奖提醒
 // @author       weiruankeji2025
 // @match        https://www.nodeseek.com/*
@@ -246,7 +246,9 @@
         const results = [];
         for (const post of posts) {
             if (results.length >= CONFIG.TRADE_COUNT) break;
-            // 只根据标题判断
+            // 排除版块公告和置顶帖
+            if (/版块规定|中介索引|防骗提示|骗子索引/i.test(post.title)) continue;
+            // 排除已完成交易
             if (/已出|已收|已售|sold|closed/i.test(post.title)) continue;
             const isBuy = /收|求|buy|购/i.test(post.title);
             results.push({
