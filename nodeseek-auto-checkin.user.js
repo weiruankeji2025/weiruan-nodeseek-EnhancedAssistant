@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         NodeSeek 增强助手
 // @namespace    https://github.com/weiruankeji2025/weiruan-nodeseek-Sign.in
-// @version      2.6.0
+// @version      2.6.1
 // @description  NodeSeek论坛增强：自动签到 + 交易监控 + 抽奖追踪 + 关键字监控 + 自动翻页
 // @author       weiruankeji2025
 // @match        https://www.nodeseek.com/*
@@ -240,8 +240,8 @@
     };
     const extractPostId = (url) => {
         if (!url || typeof url !== 'string') return null;
-        // 只匹配标准帖子链接格式：/post-数字.html 或 /post-数字
-        const match = url.match(/\/post-(\d+)(?:\.html|#|$|\?)/);
+        // 匹配帖子链接：/post-数字 后可接 -页码、.html、#锚点 或 ?查询
+        const match = url.match(/\/post-(\d+)(?=[-.#?]|$)/);
         return match ? match[1] : null;
     };
     const truncate = (str, len) => str && str.length > len ? str.trim().slice(0, len) + '…' : (str || '').trim();
@@ -752,7 +752,7 @@
 
     // ==================== 初始化 ====================
     const init = async () => {
-        console.log('[NS助手] v2.5.0');
+        console.log('[NS助手] v2.6.1');
         trackCurrentPost();
         markVisitedPostsOnPage();
         const observer = new MutationObserver(markVisitedPostsOnPage);
